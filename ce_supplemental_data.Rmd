@@ -1,0 +1,496 @@
+---
+title: "ce_supplemental_data"
+description: reading supplemental prescription data from CMS.gov, plot, publish to Plotly
+output: html_document
+---
+
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(plotly)
+library(ggplot2)
+library (readr)
+library(httr)
+library(stringr)
+library(RSocrata)
+```
+
+#Query the Medicare Prescriber data API
+https://github.com/chicago/rsocrata
+https://cran.r-project.org/web/packages/RSocrata/RSocrata.pdf
+
+```{r}
+#Load Socrata token
+Sys.getenv("token")
+
+token <- "wjfjU7dJlpvVZ3nAOq7goSfin"
+```
+
+#Drug Summary Nat'l Statistics
+2017 Drug summary: https://dev.socrata.com/foundry/data.cms.gov/szqx-nrkt
+```{r}
+drug_summary<- read.socrata("https://data.cms.gov/resource/szqx-nrkt.csv", app_token = token)
+
+drug_summary_2017 <- drug_summary
+
+nrow(drug_summary_2017)
+```
+
+#Drug Summary TN Statistics
+```{r}
+
+tn_drug_summary_15 <- read.socrata("https://data.cms.gov/resource/5f7p-yw36.csv?$where=state='Tennessee'", app_token = token) %>%
+  mutate(year=2015)
+glimpse(tn_drug_summary_15)
+nrow(tn_drug_summary_15)
+
+tn_drug_summary_16 <- read.socrata("https://data.cms.gov/resource/hjv3-puc7.csv?$where=state='Tennessee'", app_token = token)%>%
+  mutate(year=2016)
+glimpse(tn_drug_summary_16)
+nrow(tn_drug_summary_16)
+
+tn_drug_summary_17 <- read.socrata("https://data.cms.gov/resource/rrr7-49mp.csv?$where=state='Tennessee'", app_token = token)%>%
+  mutate(year=2017)
+
+glimpse(tn_drug_summary_17)
+nrow(tn_drug_summary_17)
+
+tn_drug_summary_18 <- read.socrata("https://data.cms.gov/resource/y285-qrb6.csv?$where=state_name='Tennessee'", app_token = token)%>%
+  mutate(year=2018)%>%
+  rename(state=state_name)
+
+glimpse(tn_drug_summary_18)
+nrow(tn_drug_summary_18)
+
+colnames(tn_drug_summary_18) <- colnames(tn_drug_summary_17) #standardize colnames
+
+#Combine dataframes for 2015-2018
+tn_drug_summary <- bind_rows(tn_drug_summary_15, tn_drug_summary_16, tn_drug_summary_17, tn_drug_summary_18)
+glimpse(tn_drug_summary)
+```
+
+
+#TN Prescriber summary
+2017 Prescriber summary : https://dev.socrata.com/foundry/data.cms.gov/psut-35i4
+```{r}
+prescriber_summary <- read.socrata("https://data.cms.gov/resource/psut-35i4.csv?$where=nppes_provider_state='TN'", app_token = token)
+
+prescriber_summary_2017 <- prescriber_summary
+nrow(prescriber_summary_2017)
+
+```
+
+#TN Provider utilization
+
+2017 Provider utilization: https://dev.socrata.com/foundry/data.cms.gov/77gb-8z53
+```{r}
+#path: https://data.cms.gov/resource/psut-35i4.csv?$where=nppes_provider_state="TN"
+
+provider_utilization <- read.socrata("https://data.cms.gov/resource/77gb-8z53.csv?$where=nppes_provider_state='TN'", app_token = token)
+
+provider_utilization_2017 <- provider_utilization #rename for year
+nrow(provider_utilization_2017)
+
+```
+
+```{r}
+drug_summary%>%colnames()
+
+colname_cleanup <- function(x) {
+  colnames(x) <- x %>%
+    colnames() %>%
+    str_to_lower() %>% #make colnames lowercase
+    str_replace_all("-", "_") %>% #replace hyphens with underscores
+    str_replace_all(" ", "_") %>% #replace spaces with underscores
+    str_replace_all("\\/", "_")%>% #replace slashes with underscores
+    str_replace_all("\\/", "_")
+  ;x 
+}
+```
+
+#Calculate prescription rates by opioid
+```{r}
+glimpse(tn_drug_summary)
+
+tn_opioid_prescription_rates <- tn_drug_summary%>%
+  filter(opioid_drug_flag=="Y")%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(generic_name, year)%>%
+  arrange(generic_name, year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+view(tn_opioid_prescription_rates)
+
+tn_opioid_prescription_rates%>%
+  mutate(generic_name=generic_name%>%
+  str_replace("ACETAMINOPHEN WITH CODEINE|ACETAMINOPHEN\\/CAFF\\/DIHYDROCOD|BUTALBIT\\/ACETAMIN\\/CAFF\\/CODEINE|CODEINE SULFATE|CODEINE\\/BUTALBITAL\\/ASA\\/CAFFEIN|DHCOEINE BT\\/ACETAMINOPHN\\/CAFF", "CODEINE")%>%
+    str_replace("BUPRENORPHINE|BUPRENORPHINE HCL", "BUPRENORPHINE")%>%
+    str_replace("FENTANYL|FENTANYL CITRATE", "FENTANYL")%>%
+    str_replace("HYDROCONEONE BITARTRATE|HYDROCODONE\\/ACETAMINOPHEN|HYDROCODONE\\/IBUPROFEN", "HYDROCODONE")%>%
+    str_replace("MORPHINE SULFATE|MORPHINE SULFATE\\/NALTREXONE", "MORPHINE")%>%
+    str_replace("OXYCODONE HCL|OCYCODONE HCL\\/ACETAMINOPHEN\OXYCODONE HCL\\/ASPIRIN|OXYCODONE MYRISTATE", "OXYCODONE")%>%
+    str_replace("PENTAZOCINE HCL\\/NALOXONE HCL","PENTAZOCINE")%>%
+    str_replace("TRAMADOL HCL|TRAMADOL HCL\\/ACETAMINOPHEN")%>%
+    str_remove(" HCL"))
+
+tn_opioid_prescription_rates%>%
+  distinct(generic_name)
+```
+
+#Summary metrics for TN Medicare opioid claims 2015-2018
+```{r}
+tn_drug_summary%>%
+  filter(opioid_drug_flag=="Y")%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(year)%>%
+  arrange(year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+```
+#Aggregate generic opioid drug names for plotting
+```{r}
+
+tn_opioid_rate_summary <- tn_drug_summary%>%
+  filter(opioid_drug_flag=="Y")%>%
+  mutate(generic_name=generic_name%>%
+           str_replace("DHCODEINE BT\\/ACETAMINOPHN\\/CAFF", "CODEINE")%>%
+           str_replace("ACETAMINOPHEN WITH CODEINE","CODEINE")%>%
+           str_replace("ACETAMINOPHEN\\/CAFF\\/DIHYDROCOD","CODEINE")%>%
+           str_replace("BUTALBIT\\/ACETAMIN\\/CAFF\\/CODEINE","CODEINE")%>%
+           str_replace("BUTORPHANOL TARTRATE", "BUTORPHANOL")%>%
+           str_replace("CODEINE SULFATE","CODEINE")%>%
+           str_replace("CODEINE\\/BUTALBITAL\\/ASA\\/CAFFEIN","CODEINE")%>%
+           str_replace("BUPRENORPHINE HCL", "BUPRENORPHINE")%>%
+           str_replace("FENTANYL CITRATE", "FENTANYL")%>%
+           str_replace("HYDROCODONE BITARTRATE", "HYDROCODONE")%>%
+           str_replace("HYDROCODONE\\/ACETAMINOPHEN|HYDROCODONE\\/IBUPROFEN", "HYDROCODONE") %>%
+           str_replace("MORPHINE SULFATE\\/NALTREXONE", "MORPHINE")%>%
+           str_replace("MORPHINE SULFATE", "MORPHINE")%>%
+           str_replace("OXYCODONE HCL\\/ASPIRIN", "OXYCODONE")%>%
+           str_replace("OXYCODONE HCL", "OXYCODONE")%>%
+           str_replace("OXYCODONE MYRISTATE", "OXYCODONE")%>%
+           str_replace("OXYCODONE\\/ACETAMINOPHEN", "OXYCODONE")%>%
+           str_replace("PENTAZOCINE HCL\\/NALOXONE HCL","PENTAZOCINE")%>%
+           str_replace("TRAMADOL HCL\\/ACETAMINOPHEN", "TRAMADOL")%>%
+           str_remove(" HCL")
+         )%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(generic_name, year)%>%
+  arrange(generic_name, year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+view(tn_opioid_rate_summary)
+
+```
+
+#Plot changes in TN Medicaid opioid prescription claim volume 2015-2018
+Stacked bar chart
+```{r}
+p <- tn_opioid_rate_summary%>% 
+          filter(generic_name!="LEVORPHANOL TARTRATE")%>% #Exclude very low volume opioids
+          filter(generic_name!="OPIUM/BELLADONNA ALKALOIDS")%>% #This drug used for treating spasms in urinary tract
+          rename(`Opioid` = generic_name,
+                     `# Medicare Claims` = num_claims,
+                     Year = year) %>%
+  ggplot(aes(fill=`Opioid`, 
+           y=`# Medicare Claims`, 
+           x=Year)
+       ) +
+    geom_bar(position="stack", stat="identity")+ 
+  scale_y_continuous(labels = scales::comma) 
+  
+fig<-ggplotly(p)
+
+fig
+
+#publish to Plotly
+#api_create(fig, filename = "opioid_rate_decrease")
+```
+Time series
+```{r}
+
+fig <- tn_opioid_rate_summary%>% 
+  filter(generic_name!="LEVORPHANOL TARTRATE")%>%
+  filter(generic_name!="OPIUM/BELLADONNA ALKALOIDS")%>%
+  ggplot( aes(x=year, 
+              y=num_claims, 
+              color=generic_name)) +
+    geom_line()
+
+ggplotly(fig)
+
+
+```
+#Examine specific forumlations of Naloxone for frequency of emergency injections/nasal mist claims
+```{r}
+
+naloxone <- tn_drug_summary%>%
+  filter(str_detect(generic_name, 'NALOXONE'))%>%
+  select(drug_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(drug_name, year)%>%
+  arrange(drug_name, year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+view(naloxone)
+```
+
+#Separate claim data for medically assisted opioid use disorder treatment
+```{r}
+
+oud_treatments <- tn_drug_summary%>%
+  filter(str_detect(generic_name, 'METHADONE|NALTREXONE|NALOXONE|BUPRENORPHINE'))%>%
+  mutate(generic_name=generic_name%>%
+           str_replace("BUPRENORPHINE HCL/NALOXONE HCL","BUPRENORPHINE")%>%
+           str_replace("BUPRENORPHINE HCL", "BUPRENORPHINE")%>%
+           str_replace("METHYLNALTREXONE BROMIDE","NALTREXONE")%>%
+           str_replace("MORPHINE SULFATE/NALTREXONE", "NALTREXONE")%>%
+           str_replace("NALTREXONE MICROSPHERES","NALTREXONE")%>%
+           str_replace("PENTAZOCINE HCL/NALOXONE HCL","NALOXONE")%>%
+           str_remove(" HCL")
+         )%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(generic_name, year)%>%
+  arrange(generic_name, year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+view(oud_treatments)
+
+oud_treatments%>%distinct(generic_name)
+
+```
+
+OUD medicine claims summarised by year
+```{r}
+oud_treatments%>%group_by(year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))
+```
+
+#PLOT OUD TREATMENTS
+
+```{r}
+#Stacked bar
+fig <- oud_treatments%>% #tn_opioid_prescription_rates%>%
+  rename(`Generic Name` = generic_name,
+                     `# Medicare Claims` = num_claims,
+                     Year = year) %>%
+  ggplot( aes(x=Year, 
+              y=`# Medicare Claims`, 
+              #group=fipscounty, 
+              color=`Generic Name`)) +
+    geom_line(size=1.25) +
+    geom_point(shape=21, size=2)
+  #geom_bar(position="stack", stat="identity")
+
+ggplotly(fig)
+
+#Publish to plotly
+#api_create(fig, filename = "oud_treatment_claims")
+```
+
+```{r}
+oud_treatments_grouped <- tn_drug_summary%>%
+  filter(str_detect(generic_name, 'METHADONE|NALTREXONE|NALOXONE|BUPRENORPHINE'))%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(generic_name, year)%>%
+  arrange(generic_name, year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+oud_treatments_grouped
+```
+
+```{r}
+oud_treatments_sum <- tn_drug_summary%>%
+  filter(str_detect(generic_name, 'METHADONE|NALTREXONE|NALOXONE|BUPRENORPHINE'))%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries,
+         year
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(year)%>%
+  arrange(year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+view(oud_treatments_sum)
+```
+
+
+#Summary changes
+```{r}
+tn_opioid_prescription_rates_sum <- tn_drug_summary%>%
+  filter(opioid_drug_flag=="Y")%>%
+#  select(generic_name, 
+#         number_of_prescribers, 
+#         number_of_medicare_part_d_claims,
+#         number_of_medicare_beneficiaries,
+#         year
+#         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries,
+         num_claims_ge65 = number_of_medicare_part_d_claims_for_beneficiaries_65,
+         num_beneficiaries_ge65 = number_of_medicare_beneficiaries_65)%>%
+  group_by(year)%>%
+  arrange(year)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE),
+            num_claims_ge65=sum(num_claims_ge65,na.rm = TRUE),
+            num_beneficiaries_ge65=sum(num_beneficiaries_ge65,na.rm = TRUE)
+            )%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2),
+         claim_per_benficiary_ge65 = round ((num_claims_ge65/num_beneficiaries_ge65),2))
+
+tn_opioid_prescription_rates_sum
+colnames(tn_drug_summary)
+```
+
+
+```{r}
+glimpse(drug_summary_2017)
+
+opioid_prescription_rates_2017 <- drug_summary_2017%>%
+  filter(opioid_drug_flag=="Y")%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  group_by(generic_name)%>%
+  arrange(generic_name)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+
+drug_summary_2017%>%
+  filter(opioid_drug_flag=="Y")%>%
+  select(generic_name, 
+         number_of_prescribers, 
+         number_of_medicare_part_d_claims,
+         number_of_medicare_beneficiaries
+         )%>%
+  rename(num_prescribers = number_of_prescribers,
+         num_claims = number_of_medicare_part_d_claims,
+         num_beneficiaries = number_of_medicare_beneficiaries)%>%
+  summarise(num_prescribers=sum(num_prescribers, na.rm = TRUE),
+            num_beneficiaries = sum(num_beneficiaries,na.rm = TRUE),
+            num_claims=sum(num_claims,na.rm = TRUE))%>%
+  mutate(claim_per_beneficiary = round((num_claims/num_beneficiaries),2),
+         claim_per_prescriber = round((num_claims/num_prescribers),2))
+
+
+view(opioid_prescription_rates_2017)
+```
+
+```{r}
+oud_treatments <- tn_drug_summary%>%
+  filter(str_detect(generic_name, 'METHADONE|NALTREXONE|NALOXONE|BUPRENORPHINE'))
+
+oud_treatments
+```
+
+```{r}
+prescriber_summary_2017%>%colnames()
+
+prescriber_risk_2017 <- prescriber_summary_2017%>%select(npi,
+         nppes_provider_last_org_name,
+         nppes_provider_first_name,
+         specialty_description,
+         bene_count,
+         total_claim_count,
+         opioid_prescriber_rate,
+         opioid_claim_count,
+         opioid_bene_count)%>%
+  mutate(opioids_per_beneficiary = round((opioid_claim_count/opioid_bene_count),2))
+
+view(prescriber_risk_2017)
+```
+

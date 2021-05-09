@@ -1,0 +1,101 @@
+---
+title: "SQL TN Scriptwatchers Project"
+description: query prescribers database for opioid overdose deaths data
+output: html_notebook
+---
+
+```{r}
+library(DBI)
+library(RPostgres)
+library(tidyverse)
+library(odbc)
+library(plotly)
+library(ggplot2)
+```
+
+
+#Create connection via ODBC
+```{r}
+con <- dbConnect(odbc(),# odbc
+                 driver='PostgreSQL Driver',
+                 database = 'prescribers',     # Name of the database we want to connect to
+                 host = 'localhost',         # 'localhost' or eg. 'ec2-54-83-201-96.compute-1.amazonaws.com'
+                 port = 5432, 
+                 uid = 'postgres',
+                 pwd = 'postgres')
+
+
+odbc::odbcListDrivers()
+```
+
+#Check tables in database
+```{r}
+dbListTables(con)
+```
+
+#Verify table columns
+```{r}
+dbListFields(con, 'overdose_deaths')
+```
+
+#Execute simple query from overdose_deaths table
+```{r}
+query = "SELECT * FROM overdose_deaths;"
+
+res <- dbSendQuery(con, query)
+```
+
+```{r}
+od_deaths <- dbFetch(res)
+
+# It is good practice to clear the result after fetching what you need in order to free all resources associated with the result set. 
+dbClearResult(res)
+```
+
+```{r}
+#Overdose deaths grouped & summarised by year
+od_deaths %>% 
+  select(fipscounty, year, overdose_deaths)%>%
+  group_by(year)%>%
+  summarise(total_od = sum(overdose_deaths))
+
+#Overdose deaths grouped by year and county
+deaths_yr_co <- od_deaths %>% 
+  select(fipscounty, year, overdose_deaths)%>%
+  group_by(year, fipscounty)%>%
+  summarise(total_od = sum(overdose_deaths))
+
+view(deaths_yr_co)
+```
+#Simple time series showing growth in OD deaths
+```{r}
+
+plot_df <- od_deaths %>% 
+  select(fipscounty, year, overdose_deaths)%>%
+  group_by(year)%>%
+  summarise(total_od = sum(overdose_deaths))
+
+fig <- plot_df%>%
+  ggplot( aes(x=year, y=total_od)) +
+    geom_line()
+
+ggplotly(fig)
+```
+#Spaghetti plot! Viewing YOY changes on county level is cluttered and lacks impact for story.
+```{r}
+
+
+plot_df <- od_deaths %>% 
+  select(fipscounty, year, overdose_deaths)%>%
+  group_by(year, fipscounty)%>%
+  summarise(total_od = sum(overdose_deaths))
+
+fig <- plot_df%>%
+  ggplot( aes(x=year, y=total_od, group=fipscounty, color=fipscounty)) +
+    geom_line()
+
+ggplotly(fig)
+
+```
+
+

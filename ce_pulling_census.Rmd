@@ -1,0 +1,162 @@
+---
+title: "ce_pulling_census"
+description:  Pull TN Medicare subscribers and population data from Census API with Tidycensus.
+output: html_document
+---
+```{r}
+library(tidycensus)
+library(tidyverse)
+library(dplyr)
+library(plotly)
+library(ggplot2)
+library (readr)
+library(httr)
+library(stringr)
+```
+
+```{r}
+Sys.setenv("plotly_username"="ceverest")
+Sys.setenv("plotly_api_key"="V6TM2axFVMohJrseeMna")
+```
+
+```{r}
+#custom function to cleanup column names
+colname_cleanup <- function(x) {
+  colnames(x) <- x %>%
+    colnames() %>%
+    str_to_lower() %>% #make colnames lowercase
+    str_replace_all("-", "_") %>% #replace hyphens with underscores
+    str_replace_all(" ", "_") %>% #replace spaces with underscores
+    str_replace_all("\\/", "_") #replace slashes with underscores
+  ;x 
+}
+```
+
+```{r}
+# Check your API key
+Sys.getenv("CENSUS_API_KEY")
+```
+
+Tidycensus has a built in table of counties/states and FIPS codes.
+```{r}
+tidycensus::fips_codes
+
+view(fips_codes%>%
+    #select(state, state_code) %>%
+    distinct(.keep_all = False))
+
+tn_counties <- fips_codes %>% filter(state_code==47)
+view(tn_counties)
+```
+
+ACS5 S2704 Public health insurance coverage by type
+
+NOTE: Medicare and medicaid enrollment figures are people who use the service alone OR with another form of insurance. BOTH situations are included.
+```{r}
+tn_gov_insured <-get_acs(survey = "acs5",
+                        year=2017, 
+                        variables=c(total_pop="S2704_C01_001",
+                                     medicare_enrolled = "S2704_C02_002",
+                                     medicaid_enrolled="S2704_C02_006"),
+                        geography="county", 
+                        state="TN",
+                        cache=TRUE,
+                        geometry = FALSE,
+                        #output="wide",
+                        show_call=TRUE) %>%
+            colname_cleanup()%>%
+            rename(fipscounty = geoid)%>%
+            select(!moe)%>%
+            pivot_wider(names_from = variable, values_from = estimate)%>%
+            mutate(
+              pct_medicare_enrolled = round(100 * medicare_enrolled / total_pop, 2),
+              pct_medicaid_enrolled = round(100 * medicaid_enrolled / total_pop, 2)
+                  )
+
+glimpse(tn_gov_insured)
+view(tn_gov_insured)
+
+tn_gov_insured <- tn_gov_insured %>%
+            mutate(
+              pct_medicare_enrolled = round(100 * medicare_enrolled / total_pop, 2),
+              pct_medicaid_enrolled = round(100 * medicaid_enrolled / total_pop, 2)
+                  )
+
+tn_gov_insured
+
+write.csv(tn_gov_insured, './data/tn_gov_insured.csv', row.names = FALSE)
+```
+#Pull # of people enrolled in Medicare 2015-2018 statewide
+```{r}
+years <- lst(2015, 2016, 2017, 2018) 
+
+# loop over list of years and get 5 year acs estimates
+tn_medicare_enroll <- map_dfr(years,
+                        ~get_acs(
+                          survey = "acs5",
+                          year =.x,
+                          variables=c(total_pop="S2704_C01_001",
+                                     medicare_enrolled = "S2704_C02_002"),
+                          geography="state", 
+                          state="TN",
+                         # county="Davidson",
+                          cache=TRUE,
+                          geometry = FALSE
+                        ),
+                .id = "year"  # when combining results, add id var (name of list item)
+                ) %>%
+            colname_cleanup()%>%
+           # rename(fipscounty = geoid,
+            #       est_pop = estimate)%>%
+            select(!moe) %>%
+            select(year, variable, estimate)%>%
+            pivot_wider(names_from = variable, values_from = estimate) %>%
+            mutate(pct_medicare_enrolled = round(100 * medicare_enrolled / total_pop, 2))
+
+
+tn_medicare_enroll
+
+#write.csv(tn_pop_years, './data/tn_pop_years.csv', row.names = FALSE)
+```
+
+Gather county population data 2015-2018
+https://mattherman.info/blog/tidycensus-mult-year/
+
+```{r}
+years <- lst(2015, 2016, 2017, 2018) 
+
+# loop over list of years and get 5 year acs estimates
+tn_pop_years <- map_dfr(years,
+                        ~get_acs(
+                          survey = "acs5",
+                          year =.x,
+                          variables=c(total_pop="S2704_C01_001"),
+                          geography="county", 
+                          state="TN",
+                         # county="Davidson",
+                          cache=TRUE,
+                          geometry = FALSE
+                        ),
+                .id = "year"  # when combining results, add id var (name of list item)
+                ) %>%
+            colname_cleanup()%>%
+            rename(fipscounty = geoid,
+                   est_pop = estimate)%>%
+            select(!moe)%>%
+            select(!variable)%>%
+            select(fipscounty, name, year, est_pop)
+            #pivot_wider(names_from = year, values_from = est_pop)
+
+
+tn_pop_years
+
+write.csv(tn_pop_years, './data/tn_pop_years.csv', row.names = FALSE)
+```
+
+
+
+
+
+
+
+
