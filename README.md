@@ -1,6 +1,6 @@
 # Tennessee's Opioid Crisis
 
-*This was for Nashville Software school and done as a group. My contribution to the project is located in the AlexaNotebooks folder.*
+*This project was for Nashville Software School to be completed as a group. My contribution to the project is located in the AlexaNotebooks folder.*
 
 Opioids are a class of drugs including prescription pain relievers such as oxycodone and hydrocodone, the synthetic opioid fentanyl, and the illegal drug heroin. These drugs produce euphoria in addition to pain relief, which can lead to dependence, addiction, overdose, and death. 
 
